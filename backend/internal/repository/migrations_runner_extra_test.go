@@ -3,8 +3,10 @@ package repository
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql/driver"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io/fs"
 	"strings"
 	"testing"
@@ -14,6 +16,14 @@ import (
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/require"
 )
+
+func TestIsBadConnError(t *testing.T) {
+	require.False(t, isBadConnError(nil))
+	require.False(t, isBadConnError(errors.New("query failed")))
+	require.True(t, isBadConnError(driver.ErrBadConn))
+	require.True(t, isBadConnError(fmt.Errorf("check migration 047: %w", driver.ErrBadConn)))
+	require.True(t, isBadConnError(errors.New("driver: bad connection")))
+}
 
 func TestApplyMigrations_NilDB(t *testing.T) {
 	err := ApplyMigrations(context.Background(), nil)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -50,6 +51,13 @@ CREATE TABLE IF NOT EXISTS atlas_schema_revisions (
 // 任何稳定的 int64 值都可以，只要不与同一数据库中的其他锁冲突即可。
 const migrationsAdvisoryLockID int64 = 694208311321144027
 const migrationsLockRetryInterval = 500 * time.Millisecond
+
+// migrationBadConnRetries is how many times a dropped lock session may be
+// reopened while applying migrations (SSH tunnels / docker-proxy idle kills).
+var migrationBadConnRetries = 8
+
+// migrationBadConnRetryDelay waits before reconnecting. Tests set this to 0.
+var migrationBadConnRetryDelay = 250 * time.Millisecond
 const nonTransactionalMigrationSuffix = "_notx.sql"
 const paymentOrdersOutTradeNoUniqueMigration = "120_enforce_payment_orders_out_trade_no_unique_notx.sql"
 const paymentOrdersOutTradeNoUniqueIndex = "paymentorder_out_trade_no_unique"
@@ -139,46 +147,32 @@ func applyMigrationsFS(ctx context.Context, db *sql.DB, fsys fs.FS) error {
 		return errors.New("nil sql db")
 	}
 
-	// 获取分布式锁，确保多实例部署时只有一个实例执行迁移。
-	// 这是 PostgreSQL 特有的 Advisory Lock 机制。
-	lockConn, err := db.Conn(ctx)
+	session, err := openMigrationLockSession(ctx, db)
 	if err != nil {
-		return fmt.Errorf("acquire migrations lock connection: %w", err)
-	}
-	defer func() { _ = lockConn.Close() }()
-	if err := pgAdvisoryLock(ctx, lockConn); err != nil {
 		return err
 	}
 	defer func() {
-		// 无论迁移是否成功，都要释放锁。
-		// 独立超时确保原 ctx 取消后仍会尝试释放，但数据库链路异常不会
-		// 无限阻塞进程退出。
 		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = pgAdvisoryUnlock(unlockCtx, lockConn)
+		session.close(unlockCtx)
 	}()
 
-	// 创建迁移记录表（如果不存在）。
-	// 该表记录所有已应用的迁移及其校验和。
-	if _, err := lockConn.ExecContext(ctx, schemaMigrationsTableDDL); err != nil {
-		return fmt.Errorf("create schema_migrations: %w", err)
-	}
-
-	// 自动对齐 Atlas 基线（如果检测到 legacy schema_migrations 且缺失 atlas_schema_revisions）。
-	if err := ensureAtlasBaselineAligned(ctx, lockConn, fsys); err != nil {
+	if err := runWithMigrationReconnect(ctx, session, func(conn *sql.Conn) error {
+		if _, err := conn.ExecContext(ctx, schemaMigrationsTableDDL); err != nil {
+			return fmt.Errorf("create schema_migrations: %w", err)
+		}
+		return ensureAtlasBaselineAligned(ctx, conn, fsys)
+	}); err != nil {
 		return err
 	}
 
-	// 获取所有 .sql 迁移文件并按文件名排序。
-	// 命名规范：使用零填充数字前缀（如 001_init.sql, 002_add_users.sql）。
 	files, err := fs.Glob(fsys, "*.sql")
 	if err != nil {
 		return fmt.Errorf("list migrations: %w", err)
 	}
-	sort.Strings(files) // 确保按文件名顺序执行迁移
+	sort.Strings(files)
 
 	for _, name := range files {
-		// 读取迁移文件内容
 		contentBytes, err := fs.ReadFile(fsys, name)
 		if err != nil {
 			return fmt.Errorf("read migration %s: %w", name, err)
@@ -186,98 +180,175 @@ func applyMigrationsFS(ctx context.Context, db *sql.DB, fsys fs.FS) error {
 
 		content := strings.TrimSpace(string(contentBytes))
 		if content == "" {
-			continue // 跳过空文件
-		}
-
-		// 计算文件内容的 SHA256 校验和，用于检测文件是否被修改。
-		// 这是一种防篡改机制：如果有人修改了已应用的迁移文件，系统会拒绝启动。
-		sum := sha256.Sum256([]byte(content))
-		checksum := hex.EncodeToString(sum[:])
-
-		// 检查该迁移是否已经应用
-		var existing string
-		rowErr := lockConn.QueryRowContext(ctx, "SELECT checksum FROM schema_migrations WHERE filename = $1", name).Scan(&existing)
-		if rowErr == nil {
-			// 迁移已应用，验证校验和是否匹配
-			if existing != checksum {
-				// 兼容特定历史误改场景（仅白名单规则），其余仍保持严格不可变约束。
-				if isMigrationChecksumCompatible(name, existing, checksum) {
-					continue
-				}
-				// 校验和不匹配意味着迁移文件在应用后被修改，这是危险的。
-				// 正确的做法是创建新的迁移文件来进行变更。
-				return fmt.Errorf(
-					"migration %s checksum mismatch (db=%s file=%s)\n"+
-						"This means the migration file was modified after being applied to the database.\n"+
-						"Solutions:\n"+
-						"  1. Revert to original: git log --oneline -- migrations/%s && git checkout <commit> -- migrations/%s\n"+
-						"  2. For new changes, create a new migration file instead of modifying existing ones\n"+
-						"Note: Modifying applied migrations breaks the immutability principle and can cause inconsistencies across environments",
-					name, existing, checksum, name, name,
-				)
-			}
-			continue // 迁移已应用且校验和匹配，跳过
-		}
-		if !errors.Is(rowErr, sql.ErrNoRows) {
-			return fmt.Errorf("check migration %s: %w", name, rowErr)
-		}
-
-		nonTx, err := validateMigrationExecutionMode(name, content)
-		if err != nil {
-			return fmt.Errorf("validate migration %s: %w", name, err)
-		}
-
-		if nonTx {
-			if err := prepareNonTransactionalMigration(ctx, lockConn, name); err != nil {
-				return fmt.Errorf("prepare migration %s: %w", name, err)
-			}
-
-			// *_notx.sql：用于 CREATE/DROP INDEX CONCURRENTLY 场景，必须非事务执行。
-			// 逐条语句执行，避免将多条 CONCURRENTLY 语句放入同一个隐式事务块。
-			statements := splitSQLStatements(content)
-			for i, stmt := range statements {
-				trimmed := strings.TrimSpace(stmt)
-				if trimmed == "" {
-					continue
-				}
-				if stripSQLLineComment(trimmed) == "" {
-					continue
-				}
-				if _, err := lockConn.ExecContext(ctx, trimmed); err != nil {
-					return fmt.Errorf("apply migration %s (non-tx statement %d): %w", name, i+1, err)
-				}
-			}
-			if _, err := lockConn.ExecContext(ctx, "INSERT INTO schema_migrations (filename, checksum) VALUES ($1, $2)", name, checksum); err != nil {
-				return fmt.Errorf("record migration %s (non-tx): %w", name, err)
-			}
 			continue
 		}
 
-		// 默认迁移在事务中执行，确保原子性：要么完全成功，要么完全回滚。
-		tx, err := lockConn.BeginTx(ctx, nil)
-		if err != nil {
-			return fmt.Errorf("begin migration %s: %w", name, err)
-		}
+		sum := sha256.Sum256([]byte(content))
+		checksum := hex.EncodeToString(sum[:])
 
-		// 执行迁移 SQL
-		if _, err := tx.ExecContext(ctx, content); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("apply migration %s: %w", name, err)
-		}
-
-		// 记录迁移已完成，保存文件名和校验和
-		if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (filename, checksum) VALUES ($1, $2)", name, checksum); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("record migration %s: %w", name, err)
-		}
-
-		// 提交事务
-		if err := tx.Commit(); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("commit migration %s: %w", name, err)
+		if err := runWithMigrationReconnect(ctx, session, func(conn *sql.Conn) error {
+			return applySingleMigration(ctx, conn, name, content, checksum)
+		}); err != nil {
+			return err
 		}
 	}
 
+	return nil
+}
+
+type migrationLockSession struct {
+	db   *sql.DB
+	conn *sql.Conn
+}
+
+func openMigrationLockSession(ctx context.Context, db *sql.DB) (*migrationLockSession, error) {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("acquire migrations lock connection: %w", err)
+	}
+	if err := pgAdvisoryLock(ctx, conn); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return &migrationLockSession{db: db, conn: conn}, nil
+}
+
+func (s *migrationLockSession) reconnect(ctx context.Context) error {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("reconnect migrations lock connection: %w", err)
+	}
+	if err := pgAdvisoryLock(ctx, conn); err != nil {
+		_ = conn.Close()
+		return fmt.Errorf("reacquire migrations lock: %w", err)
+	}
+	if s.conn != nil {
+		_ = s.conn.Close()
+	}
+	s.conn = conn
+	return nil
+}
+
+func (s *migrationLockSession) close(ctx context.Context) {
+	if s == nil || s.conn == nil {
+		return
+	}
+	_ = pgAdvisoryUnlock(ctx, s.conn)
+	_ = s.conn.Close()
+	s.conn = nil
+}
+
+func isBadConnError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, driver.ErrBadConn) || errors.Is(err, sql.ErrConnDone) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "bad connection") ||
+		strings.Contains(msg, "connection reset by peer") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "unexpected eof") ||
+		strings.Contains(msg, "sql: connection is already closed")
+}
+
+func runWithMigrationReconnect(ctx context.Context, session *migrationLockSession, fn func(*sql.Conn) error) error {
+	var last error
+	for attempt := 0; attempt <= migrationBadConnRetries; attempt++ {
+		last = fn(session.conn)
+		if last == nil || !isBadConnError(last) {
+			return last
+		}
+		if attempt == migrationBadConnRetries {
+			return last
+		}
+		if migrationBadConnRetryDelay > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(migrationBadConnRetryDelay):
+			}
+		}
+		if err := session.reconnect(ctx); err != nil {
+			return err
+		}
+	}
+	return last
+}
+
+func applySingleMigration(ctx context.Context, lockConn *sql.Conn, name, content, checksum string) error {
+	var existing string
+	rowErr := lockConn.QueryRowContext(ctx, "SELECT checksum FROM schema_migrations WHERE filename = $1", name).Scan(&existing)
+	if rowErr == nil {
+		if existing != checksum {
+			if isMigrationChecksumCompatible(name, existing, checksum) {
+				return nil
+			}
+			return fmt.Errorf(
+				"migration %s checksum mismatch (db=%s file=%s)\n"+
+					"This means the migration file was modified after being applied to the database.\n"+
+					"Solutions:\n"+
+					"  1. Revert to original: git log --oneline -- migrations/%s && git checkout <commit> -- migrations/%s\n"+
+					"  2. For new changes, create a new migration file instead of modifying existing ones\n"+
+					"Note: Modifying applied migrations breaks the immutability principle and can cause inconsistencies across environments",
+				name, existing, checksum, name, name,
+			)
+		}
+		return nil
+	}
+	if !errors.Is(rowErr, sql.ErrNoRows) {
+		return fmt.Errorf("check migration %s: %w", name, rowErr)
+	}
+
+	nonTx, err := validateMigrationExecutionMode(name, content)
+	if err != nil {
+		return fmt.Errorf("validate migration %s: %w", name, err)
+	}
+
+	if nonTx {
+		if err := prepareNonTransactionalMigration(ctx, lockConn, name); err != nil {
+			return fmt.Errorf("prepare migration %s: %w", name, err)
+		}
+
+		statements := splitSQLStatements(content)
+		for i, stmt := range statements {
+			trimmed := strings.TrimSpace(stmt)
+			if trimmed == "" {
+				continue
+			}
+			if stripSQLLineComment(trimmed) == "" {
+				continue
+			}
+			if _, err := lockConn.ExecContext(ctx, trimmed); err != nil {
+				return fmt.Errorf("apply migration %s (non-tx statement %d): %w", name, i+1, err)
+			}
+		}
+		if _, err := lockConn.ExecContext(ctx, "INSERT INTO schema_migrations (filename, checksum) VALUES ($1, $2)", name, checksum); err != nil {
+			return fmt.Errorf("record migration %s (non-tx): %w", name, err)
+		}
+		return nil
+	}
+
+	tx, err := lockConn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin migration %s: %w", name, err)
+	}
+
+	if _, err := tx.ExecContext(ctx, content); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("apply migration %s: %w", name, err)
+	}
+
+	if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (filename, checksum) VALUES ($1, $2)", name, checksum); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("record migration %s: %w", name, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("commit migration %s: %w", name, err)
+	}
 	return nil
 }
 

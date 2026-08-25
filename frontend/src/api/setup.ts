@@ -82,9 +82,10 @@ export async function testRedis(config: RedisConfig): Promise<void> {
 }
 
 /**
- * Perform installation
+ * Perform installation.
+ * Migrations over a remote DB / SSH tunnel routinely exceed the default 30s client timeout.
  */
 export async function install(config: InstallRequest): Promise<InstallResponse> {
-  const response = await setupClient.post('/setup/install', config)
+  const response = await setupClient.post('/setup/install', config, { timeout: 300000 })
   return response.data.data
 }

@@ -172,8 +172,8 @@ func TestNeedsSetupFallsBackToFileDetectionWhenSkipSetupIsDisabled(t *testing.T)
 func TestSetupMigrationTimeout(t *testing.T) {
 	t.Run("uses default timeout when unset", func(t *testing.T) {
 		cfg := &SetupConfig{}
-		if got := cfg.migrationTimeout(); got != 60*time.Second {
-			t.Fatalf("migrationTimeout()=%s, want 60s", got)
+		if got := cfg.migrationTimeout(); got != 30*time.Minute {
+			t.Fatalf("migrationTimeout()=%s, want 30m", got)
 		}
 	})
 

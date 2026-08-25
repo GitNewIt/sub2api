@@ -642,6 +642,7 @@ const HIDDEN_COLUMNS_CURRENT_VERSION = 'scheduler-score-hidden-by-default'
 
 // Sorting settings
 const ACCOUNT_SORT_STORAGE_KEY = 'account-table-sort'
+const ACCOUNT_GROUP_FILTER_STORAGE_KEY = 'account-group-filter'
 type AccountSortOrder = 'asc' | 'desc'
 type AccountSortState = {
   sort_by: string
@@ -673,6 +674,26 @@ const loadInitialAccountSortState = (): AccountSortState => {
     }
   } catch {
     return fallback
+  }
+}
+const loadInitialAccountGroupFilter = (): string => {
+  try {
+    const saved = localStorage.getItem(ACCOUNT_GROUP_FILTER_STORAGE_KEY)
+    if (saved == null || saved === '') return ''
+    if (saved === 'ungrouped') return saved
+    if (/^\d+$/.test(saved)) return saved
+    return ''
+  } catch {
+    return ''
+  }
+}
+
+const persistAccountGroupFilter = (group: unknown) => {
+  const value = typeof group === 'string' ? group : group == null ? '' : String(group)
+  try {
+    localStorage.setItem(ACCOUNT_GROUP_FILTER_STORAGE_KEY, value)
+  } catch {
+    /* ignore quota / private-mode failures */
   }
 }
 const sortState = reactive<AccountSortState>(loadInitialAccountSortState())
@@ -1075,7 +1096,7 @@ const {
     type: '',
     status: '',
     privacy_mode: '',
-    group: '',
+    group: loadInitialAccountGroupFilter(),
     search: '',
     include_scheduler_score: shouldIncludeSchedulerScore() ? '1' : '0',
     sort_by: sortState.sort_by,
@@ -1101,6 +1122,11 @@ const {
   rows: accounts,
   getId: (account) => account.id
 })
+
+watch(
+  () => params.group,
+  (group) => persistAccountGroupFilter(group)
+)
 
 const selectingAllResults = ref(false)
 const selectedAllResultIDs = ref<Set<number> | null>(null)

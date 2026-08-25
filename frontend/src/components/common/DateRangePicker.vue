@@ -106,7 +106,7 @@ const isOpen = ref(false)
 const containerRef = ref<HTMLElement | null>(null)
 const localStartDate = ref(props.startDate)
 const localEndDate = ref(props.endDate)
-const activePreset = ref<string | null>('last24Hours')
+const activePreset = ref<string | null>(null)
 
 const today = computed(() => {
   // Use local timezone to avoid UTC timezone issues
@@ -262,6 +262,8 @@ const onDateChange = () => {
     }
   }
 }
+
+onDateChange()
 
 const toggle = () => {
   isOpen.value = !isOpen.value

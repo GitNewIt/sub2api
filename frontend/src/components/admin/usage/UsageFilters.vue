@@ -172,9 +172,16 @@
 
       <!-- Right: actions -->
       <div v-if="showActions" class="flex w-full flex-wrap items-center justify-end gap-3 sm:w-auto">
-        <button type="button" @click="$emit('refresh')" class="btn btn-secondary">
-          {{ t('common.refresh') }}
+        <button
+          type="button"
+          class="btn btn-secondary px-2 md:px-3"
+          :disabled="loading"
+          :title="t('common.refresh')"
+          @click="$emit('refresh')"
+        >
+          <Icon name="refresh" size="md" :class="loading ? 'animate-spin' : ''" />
         </button>
+        <slot name="after-refresh" />
         <button type="button" @click="$emit('reset')" class="btn btn-secondary">
           {{ t('common.reset') }}
         </button>
@@ -197,6 +204,7 @@ import { ref, onMounted, onUnmounted, toRef, watch, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
 import Select, { type SelectOption } from '@/components/common/Select.vue'
+import Icon from '@/components/icons/Icon.vue'
 import { COMMON_ERROR_STATUS_CODES } from '@/utils/errorBadges'
 import type { SimpleApiKey, SimpleUser } from '@/api/admin/usage'
 
@@ -207,6 +215,7 @@ interface Props {
   exporting: boolean
   startDate: string
   endDate: string
+  loading?: boolean
   showActions?: boolean
   modelOptions?: string[]
   /**
@@ -220,6 +229,7 @@ interface Props {
 
 const props = withDefaults(defineProps<Props>(), {
   showActions: true,
+  loading: false,
   mode: 'usage',
   flat: false
 })
