@@ -187,6 +187,7 @@ describe('admin AccountsView bulk edit scope', () => {
           AccountCapacityCell: true,
           AccountStatusIndicator: true,
           AccountTodayStatsCell: true,
+          AccountPriorityCell: true,
           AccountGroupsCell: true,
           AccountUsageCell: true,
           Icon: true
@@ -252,6 +253,7 @@ describe('admin AccountsView bulk edit scope', () => {
           AccountCapacityCell: true,
           AccountStatusIndicator: true,
           AccountTodayStatsCell: true,
+          AccountPriorityCell: true,
           AccountGroupsCell: true,
           AccountUsageCell: true,
           Icon: true
@@ -326,6 +328,7 @@ describe('admin AccountsView bulk edit scope', () => {
           AccountCapacityCell: true,
           AccountStatusIndicator: true,
           AccountTodayStatsCell: true,
+          AccountPriorityCell: true,
           AccountGroupsCell: true,
           AccountUsageCell: true,
           Icon: true
@@ -382,6 +385,7 @@ describe('admin AccountsView bulk edit scope', () => {
           AccountCapacityCell: true,
           AccountStatusIndicator: true,
           AccountTodayStatsCell: true,
+          AccountPriorityCell: true,
           AccountGroupsCell: true,
           AccountUsageCell: true,
           Icon: true
@@ -456,6 +460,7 @@ describe('admin AccountsView bulk edit scope', () => {
           AccountCapacityCell: true,
           AccountStatusIndicator: true,
           AccountTodayStatsCell: true,
+          AccountPriorityCell: true,
           AccountGroupsCell: true,
           AccountUsageCell: true,
           Icon: true
@@ -532,6 +537,7 @@ describe('admin AccountsView bulk edit scope', () => {
           AccountCapacityCell: true,
           AccountStatusIndicator: true,
           AccountTodayStatsCell: true,
+          AccountPriorityCell: true,
           AccountGroupsCell: true,
           AccountUsageCell: true,
           Icon: true
@@ -603,6 +609,7 @@ describe('admin AccountsView bulk edit scope', () => {
           AccountCapacityCell: true,
           AccountStatusIndicator: true,
           AccountTodayStatsCell: true,
+          AccountPriorityCell: true,
           AccountGroupsCell: true,
           AccountUsageCell: true,
           Icon: true

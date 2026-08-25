@@ -97,6 +97,7 @@ const mountView = () =>
         AccountCapacityCell: true,
         AccountStatusIndicator: true,
         AccountTodayStatsCell: true,
+        AccountPriorityCell: true,
         AccountGroupsCell: true,
         AccountUsageCell: true,
         Icon: true
@@ -249,6 +250,7 @@ const mountViewWithRow = () =>
         AccountCapacityCell: true,
         AccountStatusIndicator: true,
         AccountTodayStatsCell: true,
+        AccountPriorityCell: true,
         AccountGroupsCell: true,
         AccountUsageCell: true,
         Icon: true
