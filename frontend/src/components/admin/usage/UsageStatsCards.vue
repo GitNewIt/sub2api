@@ -55,6 +55,8 @@
               </span>
             </span>
           </span>
+          <span>/</span>
+          <span>{{ t('usage.cacheRate') }}: {{ formatPercent(cacheRatePercent) }}</span>
         </p>
       </div>
     </div>
@@ -83,7 +85,13 @@
       <div class="rounded-lg bg-purple-100 p-2 dark:bg-purple-900/30 text-purple-600">
         <Icon name="clock" size="md" />
       </div>
-      <div><p class="text-xs font-medium text-gray-500">{{ t('usage.avgDuration') }}</p><p class="text-xl font-bold">{{ formatDuration(stats?.average_duration_ms || 0) }}</p></div>
+      <div>
+        <p class="text-xs font-medium text-gray-500">{{ t('usage.avgDuration') }}</p>
+        <p class="text-xl font-bold">{{ formatDuration(stats?.average_duration_ms || 0) }}</p>
+        <p class="text-xs text-gray-400">
+          {{ t('usage.avgFirstToken') }}: {{ formatDuration(stats?.average_first_token_ms || 0) }}
+        </p>
+      </div>
     </div>
   </div>
 </template>
@@ -122,6 +130,22 @@ const formatTokens = (value: number) => {
   if (value >= 1e3) return (value / 1e3).toFixed(2) + 'K'
   return value.toLocaleString()
 }
+
+const formatPercent = (value: number) => {
+  if (!Number.isFinite(value) || value <= 0) return '0%'
+  if (value >= 100) return '100%'
+  return `${value.toFixed(1)}%`
+}
+
+// Same formula as TokenUsageTrend: cache reads / all prompt-side tokens.
+const cacheRatePercent = computed(() => {
+  const input = props.stats?.total_input_tokens || 0
+  const cacheRead = props.stats?.total_cache_read_tokens || 0
+  const cacheCreate = props.stats?.total_cache_creation_tokens || 0
+  const promptTokens = input + cacheRead + cacheCreate
+  if (promptTokens <= 0) return 0
+  return (cacheRead / promptTokens) * 100
+})
 
 const cacheLabel = () => t('usage.cacheTotal')
 const cacheDetailLabel = () => t('usage.cacheBreakdown')

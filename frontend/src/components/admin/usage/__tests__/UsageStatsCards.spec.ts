@@ -10,6 +10,7 @@ const messages: Record<string, string> = {
   'usage.in': 'In',
   'usage.out': 'Out',
   'usage.cacheTotal': 'Cache',
+  'usage.cacheRate': 'Cache rate',
   'usage.cacheBreakdown': 'Cache Token Breakdown',
   'usage.cacheCreationTokensLabel': 'Cache Creation',
   'usage.cacheReadTokensLabel': 'Cache Read',
@@ -17,6 +18,7 @@ const messages: Record<string, string> = {
   'usage.accountCost': 'Cost',
   'usage.standardCost': 'Standard',
   'usage.avgDuration': 'Avg Duration',
+  'usage.avgFirstToken': 'Avg first token',
 }
 
 vi.mock('vue-i18n', async () => {
@@ -41,6 +43,7 @@ const stats = {
   total_actual_cost: 0.001,
   total_account_cost: 0.001,
   average_duration_ms: 250,
+  average_first_token_ms: 80,
 }
 
 describe('UsageStatsCards', () => {
@@ -63,5 +66,40 @@ describe('UsageStatsCards', () => {
     expect(text).toContain('12')
     expect(text).toContain('Cache Read')
     expect(text).toContain('22')
+    // cache_read / (input + cache_read + cache_creation) = 22 / 134
+    expect(text).toContain('Cache rate: 16.4%')
+  })
+
+  it('shows 0% cache rate when there are no prompt tokens', () => {
+    const wrapper = mount(UsageStatsCards, {
+      props: {
+        stats: {
+          ...stats,
+          total_input_tokens: 0,
+          total_cache_tokens: 0,
+          total_cache_creation_tokens: 0,
+          total_cache_read_tokens: 0,
+          total_tokens: 50,
+        },
+      },
+      global: {
+        stubs: {
+          Icon: true,
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('Cache rate: 0%')
+  })
+
+  it('shows average first-token latency under duration', () => {
+    const wrapper = mount(UsageStatsCards, {
+      props: { stats },
+      global: { stubs: { Icon: true } },
+    })
+
+    expect(wrapper.text()).toContain('Avg Duration')
+    expect(wrapper.text()).toContain('250ms')
+    expect(wrapper.text()).toContain('Avg first token: 80ms')
   })
 })

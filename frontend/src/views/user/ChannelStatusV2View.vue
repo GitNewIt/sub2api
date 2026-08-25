@@ -24,8 +24,8 @@
                 <LoadingSpinner size="sm" />
                 {{ t('channelMonitorV2.updating') }}
               </span>
-              <span v-else-if="snapshot?.coverage.data_through">
-                {{ t('channelMonitorV2.updatedTo', { time: formatTime(snapshot.coverage.data_through) }) }}
+              <span v-else-if="coverageClock">
+                {{ t('channelMonitorV2.updatedTo', { time: formatTime(coverageClock) }) }}
               </span>
               <span v-else class="text-gray-400">{{ t('common.loading') }}</span>
               <span
@@ -640,6 +640,7 @@ const activeRowsEmpty = computed(() =>
       : userRows.value.length === 0
 )
 /** First-upgrade backfill toward 90m/24h/7d/30d; banner hides when backend omits bootstrap. */
+const coverageClock = computed(() => validCoverageTime(snapshot.value?.coverage?.data_through))
 const bootstrapActive = computed(() => Boolean(snapshot.value?.coverage?.bootstrap?.active))
 const bootstrapPercent = computed(() => {
   const raw = snapshot.value?.coverage?.bootstrap?.progress_percent
@@ -850,6 +851,12 @@ function latencyKpiSecondary(metric: {
   avg_ms?: number | null
 }) {
   return formatLatencyKpiSecondary(metric.avg_ms, metric.p90_ms, metric.p95_ms)
+}
+function validCoverageTime(value?: string | null) {
+  if (!value) return ''
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime()) || parsed.getUTCFullYear() < 2000) return ''
+  return value
 }
 function formatTime(value: string) {
   return new Intl.DateTimeFormat(locale.value || undefined, {

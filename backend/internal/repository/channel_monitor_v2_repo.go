@@ -1021,7 +1021,9 @@ func (r *channelMonitorV2Repository) loadCoverage(ctx context.Context, filter se
 			RequestedStart:        filter.Start,
 			RequestedEnd:          filter.End,
 			CoverageStart:         filter.End,
-			DataThrough:           filter.Start,
+			// Leave DataThrough zero: using filter.Start made the UI show
+			// "updated to <90m window start>" while bootstrap was still 0%.
+			DataThrough:           time.Time{},
 			ComputedAt:            time.Time{},
 			AggregationLagSeconds: 0,
 			CoverageComplete:      false,

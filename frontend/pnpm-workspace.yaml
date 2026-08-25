@@ -1,3 +1,4 @@
+# pnpm 11: lifecycle scripts are blocked unless listed here.
 allowBuilds:
-  esbuild: false
-  vue-demi: false
+  esbuild: true
+  vue-demi: true

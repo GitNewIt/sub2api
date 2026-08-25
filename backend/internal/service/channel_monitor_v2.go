@@ -326,9 +326,10 @@ func ChannelMonitorV2BootstrapProgress(now, coveredFrom time.Time, hasData bool)
 	}
 	if coveredFrom.IsZero() {
 		// Have data_through but no cursor yet — treat as barely started.
+		// Show 1% so the bar is not stuck at 0% after the first successful tick.
 		return &ChannelMonitorV2Bootstrap{
 			Active:          true,
-			ProgressPercent: 0,
+			ProgressPercent: 1,
 			TargetStart:     targetStart,
 		}
 	}

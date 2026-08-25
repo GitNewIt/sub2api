@@ -521,11 +521,12 @@ func TestUsageLogRepositoryGetStatsWithFiltersRequestedModelSource(t *testing.T)
 			"actual_cost",
 			"account_cost",
 			"avg_duration_ms",
+			"avg_first_token_ms",
 		}).
-			AddRow(1, 1, nil, nil, int64(1), int64(2), int64(3), int64(1), int64(3), 1.2, 1.0, 1.2, 20.0).
-			AddRow(0, 1, "/v1/responses", nil, int64(1), int64(2), int64(3), int64(1), int64(3), 1.2, 1.0, 1.2, 20.0).
-			AddRow(1, 0, nil, "/v1/responses", int64(1), int64(2), int64(3), int64(1), int64(3), 1.2, 1.0, 1.2, 20.0).
-			AddRow(0, 0, "/v1/responses", "/v1/responses", int64(1), int64(2), int64(3), int64(1), int64(3), 1.2, 1.0, 1.2, 20.0))
+			AddRow(1, 1, nil, nil, int64(1), int64(2), int64(3), int64(1), int64(3), 1.2, 1.0, 1.2, 20.0, 8.0).
+			AddRow(0, 1, "/v1/responses", nil, int64(1), int64(2), int64(3), int64(1), int64(3), 1.2, 1.0, 1.2, 20.0, 8.0).
+			AddRow(1, 0, nil, "/v1/responses", int64(1), int64(2), int64(3), int64(1), int64(3), 1.2, 1.0, 1.2, 20.0, 8.0).
+			AddRow(0, 0, "/v1/responses", "/v1/responses", int64(1), int64(2), int64(3), int64(1), int64(3), 1.2, 1.0, 1.2, 20.0, 8.0))
 
 	stats, err := repo.GetStatsWithFilters(context.Background(), filters)
 	require.NoError(t, err)
@@ -562,12 +563,14 @@ func TestUsageLogRepositoryGetStatsWithFiltersRequestTypePriority(t *testing.T) 
 			"actual_cost",
 			"account_cost",
 			"avg_duration_ms",
-		}).AddRow(1, 1, nil, nil, int64(1), int64(2), int64(3), int64(1), int64(3), 1.2, 1.0, 1.2, 20.0))
+			"avg_first_token_ms",
+		}).AddRow(1, 1, nil, nil, int64(1), int64(2), int64(3), int64(1), int64(3), 1.2, 1.0, 1.2, 20.0, 8.0))
 
 	stats, err := repo.GetStatsWithFilters(context.Background(), filters)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), stats.TotalRequests)
 	require.Equal(t, int64(9), stats.TotalTokens)
+	require.Equal(t, 8.0, stats.AverageFirstTokenMs)
 	require.NotNil(t, stats.TotalAccountCost, "TotalAccountCost should always be returned")
 	require.Equal(t, 1.2, *stats.TotalAccountCost)
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -687,8 +690,8 @@ func TestUsageLogRepositoryGetStatsWithFiltersAlwaysReturnsAccountCost(t *testin
 		WillReturnRows(sqlmock.NewRows([]string{
 			"inbound_grouped", "upstream_grouped", "inbound_endpoint", "upstream_endpoint",
 			"requests", "input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens",
-			"cost", "actual_cost", "account_cost", "avg_duration_ms",
-		}).AddRow(1, 1, nil, nil, int64(50), int64(1000), int64(2000), int64(60), int64(40), 15.0, 12.5, 11.0, 100.0))
+			"cost", "actual_cost", "account_cost", "avg_duration_ms", "avg_first_token_ms",
+		}).AddRow(1, 1, nil, nil, int64(50), int64(1000), int64(2000), int64(60), int64(40), 15.0, 12.5, 11.0, 100.0, 40.0))
 
 	stats, err := repo.GetStatsWithFilters(context.Background(), filters)
 	require.NoError(t, err)

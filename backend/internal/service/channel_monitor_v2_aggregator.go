@@ -220,9 +220,9 @@ func (s *ChannelMonitorV2Aggregator) runOnce() {
 	if parent == nil {
 		parent = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(parent, 55*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 90*time.Second)
 	defer cancel()
-	release, acquired := tryAcquireSingletonLeaderLock(ctx, nil, s.db, channelMonitorV2AggregatorLockKey, s.instanceID, 2*time.Minute)
+	release, acquired := tryAcquireSingletonLeaderLock(ctx, nil, s.db, channelMonitorV2AggregatorLockKey, s.instanceID, 3*time.Minute)
 	if !acquired {
 		return
 	}
@@ -241,9 +241,14 @@ func (s *ChannelMonitorV2Aggregator) runOnce() {
 	hasData := s.hasAggregated
 	s.mu.Unlock()
 
-	// Phase 1 (first upgrade / empty): seed the default 90m UI window quickly.
+	// Phase 1 (first upgrade / empty): seed a recent window so the 90m view
+	// can appear. Shrink the seed after timeouts — a fixed 2h scan on a large
+	// usage_logs table otherwise never writes a watermark and UI stays at 0%.
 	if !hasData || cursor.IsZero() {
-		start := now.Add(-channelMonitorV2BootstrapFirst)
+		s.mu.Lock()
+		seed := s.bootstrapSeedLocked()
+		s.mu.Unlock()
+		start := now.Add(-seed)
 		started := time.Now()
 		if err := s.repo.RecomputeRange(ctx, start, now); err != nil {
 			logger.LegacyPrintf("service.channel_monitor_v2", "[ChannelMonitorV2] bootstrap recent aggregation failed: %v", err)
@@ -316,6 +321,19 @@ func channelMonitorV2MaxChunkForDepth(now, end time.Time) time.Duration {
 	default:
 		return channelMonitorV2MaxChunkFar
 	}
+}
+
+// bootstrapSeedLocked returns the next empty-watermark seed window.
+// Caller must hold s.mu.
+func (s *ChannelMonitorV2Aggregator) bootstrapSeedLocked() time.Duration {
+	seed := channelMonitorV2BootstrapFirst
+	if s.backfillFailures > 0 && s.backfillChunk > 0 && s.backfillChunk < seed {
+		seed = s.backfillChunk
+	}
+	if seed < channelMonitorV2MinBackfillChunk {
+		seed = channelMonitorV2MinBackfillChunk
+	}
+	return seed
 }
 
 func (s *ChannelMonitorV2Aggregator) recordBackfillSuccess(coveredFrom time.Time, elapsed time.Duration, now time.Time) {

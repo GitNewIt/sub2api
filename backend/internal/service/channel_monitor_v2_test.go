@@ -94,6 +94,13 @@ func TestChannelMonitorV2BootstrapProgress(t *testing.T) {
 		require.Equal(t, now.Add(-ChannelMonitorV2BootstrapProductWindow), b.TargetStart)
 	})
 
+	t.Run("has data without cursor shows at least 1 percent", func(t *testing.T) {
+		b := ChannelMonitorV2BootstrapProgress(now, time.Time{}, true)
+		require.NotNil(t, b)
+		require.True(t, b.Active)
+		require.Equal(t, 1, b.ProgressPercent)
+	})
+
 	t.Run("2h seed is small percent of 30d", func(t *testing.T) {
 		covered := now.Add(-2 * time.Hour)
 		b := ChannelMonitorV2BootstrapProgress(now, covered, true)

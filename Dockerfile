@@ -25,14 +25,18 @@ ARG NPM_CONFIG_REGISTRY
 
 WORKDIR /app/frontend
 
-# Install pnpm (pinned to v9 to match CI and keep builds reproducible)
-RUN corepack enable && corepack prepare pnpm@9 --activate
+# Install pnpm (v11 matches this repo's lockfile / local toolchain)
+RUN corepack enable && corepack prepare pnpm@11 --activate
 
-# Install dependencies first (better caching)
-COPY frontend/package.json frontend/pnpm-lock.yaml ./
+# pnpm 11 blocks unapproved lifecycle scripts (esbuild, vue-demi) unless
+# they are listed in pnpm-workspace.yaml (allowBuilds).
+COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
 RUN --mount=type=cache,id=sub2api-pnpm-store,target=/root/.local/share/pnpm/store \
-    if [ -n "${NPM_CONFIG_REGISTRY}" ]; then pnpm config set registry "${NPM_CONFIG_REGISTRY}"; fi && \
-    pnpm install --frozen-lockfile --prefer-offline
+    if [ -n "${NPM_CONFIG_REGISTRY}" ]; then \
+      pnpm install --frozen-lockfile --prefer-offline --registry "${NPM_CONFIG_REGISTRY}"; \
+    else \
+      pnpm install --frozen-lockfile --prefer-offline; \
+    fi
 
 # Copy frontend source and build.
 # LegalDocumentView.vue (admin-compliance gate) build-time imports

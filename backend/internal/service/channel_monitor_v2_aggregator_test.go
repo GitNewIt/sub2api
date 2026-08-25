@@ -47,3 +47,21 @@ func TestChannelMonitorV2AggregatorAdaptiveChunk(t *testing.T) {
 	require.Greater(t, s.backfillChunk, 30*time.Minute)
 	require.LessOrEqual(t, s.backfillChunk, channelMonitorV2MaxChunkForDepth(now, cursor.Add(-30*time.Minute)))
 }
+
+func TestChannelMonitorV2AggregatorBootstrapSeedShrinks(t *testing.T) {
+	s := NewChannelMonitorV2Aggregator(nil, nil, nil)
+	s.mu.Lock()
+	require.Equal(t, channelMonitorV2BootstrapFirst, s.bootstrapSeedLocked())
+	s.mu.Unlock()
+
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	s.recordBackfillFailure(now, time.Time{})
+	s.mu.Lock()
+	require.Equal(t, 30*time.Minute, s.bootstrapSeedLocked())
+	s.mu.Unlock()
+
+	s.recordBackfillFailure(now, time.Time{})
+	s.mu.Lock()
+	require.Equal(t, 15*time.Minute, s.bootstrapSeedLocked())
+	s.mu.Unlock()
+}

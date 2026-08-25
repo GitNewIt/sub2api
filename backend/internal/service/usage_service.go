@@ -52,6 +52,7 @@ type UsageStats struct {
 	TotalCost                float64 `json:"total_cost"`
 	TotalActualCost          float64 `json:"total_actual_cost"`
 	AverageDurationMs        float64 `json:"average_duration_ms"`
+	AverageFirstTokenMs      float64 `json:"average_first_token_ms"`
 }
 
 // UsageService 使用统计服务

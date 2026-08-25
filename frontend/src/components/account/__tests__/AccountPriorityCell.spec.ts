@@ -57,7 +57,12 @@ function makeAccount(overrides: Partial<Account> = {}): Account {
 
 function mountCell(account = makeAccount()) {
   return mount(AccountPriorityCell, {
-    props: { account }
+    props: { account },
+    global: {
+      stubs: {
+        Icon: true
+      }
+    }
   })
 }
 
@@ -87,17 +92,27 @@ describe('AccountPriorityCell', () => {
     expect(wrapper.emitted('updated')?.[0]).toEqual([updated])
   })
 
-  it('saves when the native stepper fires change', async () => {
+  it('increases and saves immediately when plus is clicked', async () => {
     const updated = makeAccount({ priority: 2 })
     updateAccount.mockResolvedValue(updated)
-    const wrapper = mountCell()
-    const input = wrapper.get('[data-testid="account-priority-input"]')
+    const wrapper = mountCell(makeAccount({ priority: 1 }))
 
-    await input.setValue('2')
-    await input.trigger('change')
+    await wrapper.get('[data-testid="account-priority-increase"]').trigger('click')
     await flushPromises()
 
     expect(updateAccount).toHaveBeenCalledWith(42, { priority: 2 })
+    expect(wrapper.emitted('updated')?.[0]).toEqual([updated])
+  })
+
+  it('does not decrease below 1', async () => {
+    const wrapper = mountCell(makeAccount({ priority: 1 }))
+    const decrease = wrapper.get('[data-testid="account-priority-decrease"]')
+
+    expect((decrease.element as HTMLButtonElement).disabled).toBe(true)
+    await decrease.trigger('click')
+    await flushPromises()
+
+    expect(updateAccount).not.toHaveBeenCalled()
   })
 
   it('does not save when the value is unchanged', async () => {
