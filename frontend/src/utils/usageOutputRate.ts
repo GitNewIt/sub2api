@@ -14,7 +14,10 @@ type OutputRateRow = {
  */
 export const calcOutputTokensPerSecond = (row: OutputRateRow | null | undefined): number | null => {
   if (!row) return null
-  const tokens = textOutputTokens(row)
+  const tokens = textOutputTokens({
+    output_tokens: row.output_tokens ?? 0,
+    image_output_tokens: row.image_output_tokens ?? 0,
+  })
   if (tokens <= 0) return null
 
   const durationMs = row.duration_ms
