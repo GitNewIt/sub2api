@@ -69,6 +69,9 @@ const messages: Record<string, string> = {
 	'usage.upstreamResponseModel': 'Upstream response',
 	'usage.modelVariant': 'Possible version variant',
 	'usage.modelMismatch': 'Different model',
+	'usage.latencyFirstToken': '首字',
+	'usage.latencyDuration': '总耗时',
+	'usage.latencyOutputRate': '速度',
 }
 
 vi.mock('vue-i18n', async () => {
@@ -773,5 +776,68 @@ describe('admin UsageTable deleted-user badge', () => {
 
     expect(wrapper.text()).not.toContain('Deleted')
     expect(wrapper.text()).toContain('active@test.com')
+  })
+})
+
+describe('admin UsageTable output rate', () => {
+  const DataTableLatencyStub = {
+    props: ['data'],
+    template: `
+      <div>
+        <div v-for="row in data" :key="row.request_id">
+          <slot name="cell-latency" :row="row" />
+        </div>
+      </div>
+    `,
+  }
+
+  const mountLatency = (rows: Record<string, unknown>[]) =>
+    mount(UsageTable, {
+      props: {
+        data: rows,
+        loading: false,
+        columns: [{ key: 'latency', label: 'Latency' }],
+      },
+      global: {
+        stubs: {
+          DataTable: DataTableLatencyStub,
+          EmptyState: true,
+          Icon: true,
+          Teleport: true,
+        },
+      },
+    })
+
+  it('shows speed as xx.x t/s after first token', () => {
+    const wrapper = mountLatency([
+      {
+        ...baseImageRow,
+        request_id: 'req-output-rate',
+        billing_mode: 'token',
+        output_tokens: 100,
+        image_output_tokens: 0,
+        first_token_ms: 2000,
+        duration_ms: 4000,
+      },
+    ])
+
+    expect(wrapper.get('[data-testid="output-rate"]').text()).toBe('50.0 t/s')
+    expect(wrapper.text()).toContain('速度')
+  })
+
+  it('hides speed when generation time is missing', () => {
+    const wrapper = mountLatency([
+      {
+        ...baseImageRow,
+        request_id: 'req-no-output-rate',
+        billing_mode: 'token',
+        output_tokens: 100,
+        image_output_tokens: 0,
+        first_token_ms: null,
+        duration_ms: null,
+      },
+    ])
+
+    expect(wrapper.find('[data-testid="output-rate"]').exists()).toBe(false)
   })
 })

@@ -247,6 +247,15 @@
               <span v-else class="text-gray-400 dark:text-gray-500">-</span>
               <span class="text-gray-400 dark:text-gray-500">{{ t('usage.latencyDuration') }}</span>
               <span class="font-medium tabular-nums" :class="LATENCY_TEXT_CLASSES[durationSeverity(row.duration_ms ?? 0)]">{{ formatDuration(row.duration_ms) }}</span>
+              <template v-for="rate in [rowOutputRate(row)]" :key="row.request_id">
+                <template v-if="rate">
+                  <span class="text-gray-400 dark:text-gray-500">{{ t('usage.latencyOutputRate') }}</span>
+                  <span
+                    data-testid="output-rate"
+                    class="font-medium tabular-nums text-violet-600 dark:text-violet-400"
+                  >{{ rate }}</span>
+                </template>
+              </template>
             </div>
           </div>
         </template>
@@ -522,6 +531,7 @@ import { formatCacheTokens, formatMultiplier } from '@/utils/formatters'
 import { formatTokenPricePerMillion } from '@/utils/usagePricing'
 import { getUsageServiceTierLabel } from '@/utils/usageServiceTier'
 import { resolveUsageRequestType } from '@/utils/usageRequestType'
+import { formatRowOutputTokensPerSecond } from '@/utils/usageOutputRate'
 import {
   LATENCY_BAR_CLASSES,
   LATENCY_BAR_FROM_CLASSES,
@@ -711,6 +721,8 @@ const formatDuration = (ms: number | null | undefined): string => {
   if (totalSec < 3600) return `${Math.floor(totalSec / 60)}m ${totalSec % 60}s`
   return `${Math.floor(totalSec / 3600)}h ${Math.floor((totalSec % 3600) / 60)}m`
 }
+
+const rowOutputRate = (row: AdminUsageLog): string | null => formatRowOutputTokensPerSecond(row)
 
 // Cost tooltip functions
 const showTooltip = (event: MouseEvent, row: AdminUsageLog) => {
