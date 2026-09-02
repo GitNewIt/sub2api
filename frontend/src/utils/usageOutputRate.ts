@@ -7,10 +7,13 @@ type OutputRateRow = {
   first_token_ms?: number | null
 }
 
+/** 生成时长下限：短于 1s 时按 1s 计，避免首字后瞬间结束把速率算得异常偏高 */
+const MIN_GENERATION_MS = 1000
+
 /**
  * 输出速率（token/s）：文本输出 token 除以生成时长。
  * 有首字耗时时，生成时长 = 总耗时 - 首字；否则用总耗时。
- * 数据不足时返回 null，调用方不展示该行。
+ * 生成时长不足 1 秒时按 1 秒计。数据不足时返回 null，调用方不展示该行。
  */
 export const calcOutputTokensPerSecond = (row: OutputRateRow | null | undefined): number | null => {
   if (!row) return null
@@ -28,7 +31,7 @@ export const calcOutputTokensPerSecond = (row: OutputRateRow | null | undefined)
   const generationMs = firstTokenMs != null ? durationMs - firstTokenMs : durationMs
   if (generationMs <= 0) return null
 
-  const tps = tokens / (generationMs / 1000)
+  const tps = tokens / (Math.max(generationMs, MIN_GENERATION_MS) / 1000)
   return Number.isFinite(tps) ? tps : null
 }
 

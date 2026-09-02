@@ -37,6 +37,20 @@ describe('usageOutputRate', () => {
     })).toBe(50)
   })
 
+  it('floors generation time below 1s to 1s', () => {
+    // 首字 23.81s、总耗时 24.05s、输出 921 token：间隔 0.24s 若按真实间隔会到 3800+ t/s
+    expect(calcOutputTokensPerSecond({
+      output_tokens: 921,
+      first_token_ms: 23810,
+      duration_ms: 24050,
+    })).toBe(921)
+    expect(formatRowOutputTokensPerSecond({
+      output_tokens: 921,
+      first_token_ms: 23810,
+      duration_ms: 24050,
+    })).toBe('921.0 t/s')
+  })
+
   it('returns null when tokens or generation time are missing', () => {
     expect(calcOutputTokensPerSecond({
       output_tokens: 0,
