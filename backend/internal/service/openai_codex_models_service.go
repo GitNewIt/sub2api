@@ -1939,7 +1939,19 @@ func convertOpenAIModelListToCodexManifestForAccount(body []byte, account *Accou
 			imageInputModels[modelID] = true
 		}
 	}
-	converted, err := buildCodexModelsManifest(modelIDs, imageInputModels, nil, nil)
+	// Some OpenAI-compatible providers include capability fields directly in
+	// their standard /models entries. Preserve those fields during conversion
+	// instead of reducing the response to model IDs and falling back to defaults.
+	modelMetadata := make(map[string]codexModelMetadataOverride)
+	if _, directMetadata, parseErr := extractUpstreamModelCatalog(body, false); parseErr == nil {
+		for modelID, metadata := range directMetadata {
+			modelMetadata[modelID] = codexModelMetadataOverride{UpstreamModelMetadata: metadata}
+			if modalities := normalizeCodexInputModalities(metadata.InputModalities); stringSliceContains(modalities, "image") {
+				imageInputModels[modelID] = true
+			}
+		}
+	}
+	converted, err := buildCodexModelsManifest(modelIDs, imageInputModels, nil, modelMetadata)
 	if err != nil {
 		return body
 	}

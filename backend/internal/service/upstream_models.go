@@ -248,6 +248,17 @@ func (s *AccountTestService) SyncUpstreamModelCatalog(ctx context.Context, accou
 			Code:    UpstreamModelMetadataIncompleteCode,
 			Message: "Model IDs were synced, but capability metadata is incomplete.",
 		})
+		// 能力补全失败时不能用不完整数据替换完整快照，但上游已经明确
+		// 返回的能力字段仍然有价值。特别是 input_modalities 直接决定
+		// Codex 是否发送图片输入，丢弃它会让新建账号错误回退为 text-only。
+		if snapshot, changed := mergeExplicitUpstreamModelMetadataSnapshot(account, catalog.Metadata); changed &&
+			account != nil && account.ID > 0 && s.accountRepo != nil {
+			snapshot.SyncedAt = time.Now().UTC().Format(time.RFC3339)
+			if err := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{UpstreamModelMetadataExtraKey: snapshot}); err != nil {
+				return nil, newUpstreamModelSyncInternalError("Failed to save upstream model metadata", err)
+			}
+			account.SetUpstreamModelMetadataSnapshot(snapshot)
+		}
 		return catalog, nil
 	}
 	if len(catalog.Metadata) == 0 || account == nil || account.ID <= 0 || s.accountRepo == nil {
@@ -332,6 +343,110 @@ func upstreamModelMetadataIsUseful(metadata UpstreamModelMetadata) bool {
 		len(metadata.InputModalities) > 0 ||
 		metadata.ContextWindow > 0 ||
 		metadata.MaxOutputTokens > 0
+}
+
+func upstreamModelMetadataHasExplicitCapability(metadata UpstreamModelMetadata) bool {
+	return metadata.Reasoning != nil ||
+		len(metadata.SupportedReasoningLevels) > 0 ||
+		len(metadata.InputModalities) > 0 ||
+		metadata.ContextWindow > 0 ||
+		metadata.MaxOutputTokens > 0
+}
+
+func mergeExplicitUpstreamModelMetadataSnapshot(
+	account *Account,
+	metadata map[string]UpstreamModelMetadata,
+) (UpstreamModelMetadataSnapshot, bool) {
+	snapshot := UpstreamModelMetadataSnapshot{
+		Source: "upstream",
+		Models: make(map[string]UpstreamModelMetadata),
+	}
+	if account != nil {
+		if existing := account.GetUpstreamModelMetadataSnapshot(); existing != nil {
+			snapshot = *existing
+			snapshot.Models = make(map[string]UpstreamModelMetadata, len(existing.Models)+len(metadata))
+			for modelID, model := range existing.Models {
+				snapshot.Models[modelID] = model
+			}
+			if strings.TrimSpace(snapshot.Source) == "" {
+				snapshot.Source = "upstream"
+			}
+		}
+	}
+
+	changed := false
+	for modelID, current := range metadata {
+		modelID = strings.TrimSpace(modelID)
+		if modelID == "" || !upstreamModelMetadataHasExplicitCapability(current) {
+			continue
+		}
+		existing, ok := snapshot.Models[modelID]
+		if !ok {
+			snapshot.Models[modelID] = current
+			changed = true
+			continue
+		}
+		merged, modelChanged := mergeExplicitUpstreamModelMetadata(existing, current)
+		if modelChanged {
+			snapshot.Models[modelID] = merged
+			changed = true
+		}
+	}
+	return snapshot, changed
+}
+
+func mergeExplicitUpstreamModelMetadata(primary, current UpstreamModelMetadata) (UpstreamModelMetadata, bool) {
+	merged := primary
+	changed := false
+	if strings.TrimSpace(merged.ID) == "" && strings.TrimSpace(current.ID) != "" {
+		merged.ID = strings.TrimSpace(current.ID)
+		changed = true
+	}
+	if current.Reasoning != nil && (merged.Reasoning == nil || *merged.Reasoning != *current.Reasoning) {
+		reasoning := *current.Reasoning
+		merged.Reasoning = &reasoning
+		changed = true
+	}
+	if current.Reasoning != nil && strings.TrimSpace(current.DefaultReasoningLevel) != "" &&
+		normalizeReasoningLevel(merged.DefaultReasoningLevel) != normalizeReasoningLevel(current.DefaultReasoningLevel) {
+		merged.DefaultReasoningLevel = normalizeReasoningLevel(current.DefaultReasoningLevel)
+		changed = true
+	}
+	if len(current.SupportedReasoningLevels) > 0 {
+		levels := normalizeReasoningLevels(current.SupportedReasoningLevels)
+		if len(levels) > 0 && !equalStringSlices(merged.SupportedReasoningLevels, levels) {
+			merged.SupportedReasoningLevels = levels
+			changed = true
+		}
+	}
+	if len(current.InputModalities) > 0 {
+		modalities := normalizeCodexInputModalities(current.InputModalities)
+		if len(modalities) > 0 && !equalStringSlices(merged.InputModalities, modalities) {
+			merged.InputModalities = modalities
+			changed = true
+		}
+	}
+	if current.ContextWindow > 0 && merged.ContextWindow != current.ContextWindow {
+		merged.ContextWindow = current.ContextWindow
+		changed = true
+	}
+	if current.MaxOutputTokens > 0 && merged.MaxOutputTokens != current.MaxOutputTokens {
+		merged.MaxOutputTokens = current.MaxOutputTokens
+		changed = true
+	}
+	return merged, changed
+}
+
+func equalStringSlices(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func mergeUpstreamModelMetadata(primary, fallback UpstreamModelMetadata) (UpstreamModelMetadata, bool) {
@@ -1090,6 +1205,8 @@ type upstreamModelCapabilityEntry struct {
 	SupportedReasoningLevels []json.RawMessage          `json:"supported_reasoning_levels"`
 	ReasoningOptions         []modelsDevReasoningOption `json:"reasoning_options"`
 	InputModalities          []string                   `json:"input_modalities"`
+	SupportedInputModalities []string                   `json:"supported_input_modalities"` // common compatibility field
+	SupportsVision           *bool                      `json:"supports_vision"`            // distinguish missing from explicit false
 	Modalities               modelsDevModalities        `json:"modalities"`
 	ContextWindow            int64                      `json:"context_window"`
 	MaxContextWindow         int64                      `json:"max_context_window"`
@@ -1165,7 +1282,16 @@ func upstreamMetadataFromCapabilityEntry(modelID string, entry upstreamModelCapa
 	}
 	modalities := entry.InputModalities
 	if len(modalities) == 0 {
+		modalities = entry.SupportedInputModalities
+	}
+	if len(modalities) == 0 {
 		modalities = entry.Modalities.Input
+	}
+	if len(modalities) == 0 && entry.SupportsVision != nil {
+		modalities = []string{"text"}
+		if *entry.SupportsVision {
+			modalities = append(modalities, "image")
+		}
 	}
 	contextWindow := entry.ContextWindow
 	if contextWindow <= 0 {

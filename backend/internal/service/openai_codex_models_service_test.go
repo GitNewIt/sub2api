@@ -1935,6 +1935,27 @@ func TestConvertOpenAIModelListToCodexManifestUsesCompleteDescriptors(t *testing
 	require.Len(t, models[0]["supported_reasoning_levels"], 4)
 }
 
+func TestConvertOpenAIModelListToCodexManifestPreservesDirectCapabilities(t *testing.T) {
+	t.Parallel()
+
+	upstreamBody := `{"object":"list","data":[{
+		"id":"custom-vision-model",
+		"reasoning":false,
+		"input_modalities":["text","image"],
+		"context_window":256000
+	}]}`
+	converted := convertOpenAIModelListToCodexManifest([]byte(upstreamBody))
+	models := decodeCodexManifestModels(t, converted)
+
+	require.Len(t, models, 1)
+	require.Equal(t, "custom-vision-model", models[0]["slug"])
+	require.Equal(t, []any{"text", "image"}, models[0]["input_modalities"])
+	require.Equal(t, "none", models[0]["default_reasoning_level"])
+	require.Equal(t, []string{"none"}, effortsFromManifestModel(t, models[0]))
+	require.EqualValues(t, 256_000, models[0]["context_window"])
+	require.EqualValues(t, 256_000, models[0]["max_context_window"])
+}
+
 func TestCompleteAPIKeyCodexModelsManifestForClientPreservesProviderMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -2034,6 +2055,27 @@ func TestCompleteAPIKeyCodexModelsManifestForClientUsesSyncedMetadataForConverte
 	require.Equal(t, []any{"text", "image"}, models[0]["input_modalities"])
 	require.EqualValues(t, 999_000, models[0]["context_window"])
 	require.EqualValues(t, 999_000, models[0]["max_context_window"])
+}
+
+// Scenario: 只有图片能力的部分同步快照也必须驱动 Codex manifest 的图片输入字段。
+func TestCompleteAPIKeyCodexModelsManifestForClientUsesPartialSyncedImageCapability(t *testing.T) {
+	t.Parallel()
+
+	account := newCodexModelsAPIKeyTestAccount("https://upstream.example/v1")
+	account.SetUpstreamModelMetadataSnapshot(UpstreamModelMetadataSnapshot{Models: map[string]UpstreamModelMetadata{
+		"custom-vision-model": {
+			ID:              "custom-vision-model",
+			InputModalities: []string{"text", "image"},
+		},
+	}})
+	manifest := &CodexModelsManifest{Body: []byte(`{"models":[{"slug":"custom-vision-model"}]}`)}
+
+	svc := &OpenAIGatewayService{}
+	require.NoError(t, svc.CompleteAPIKeyCodexModelsManifestForClient(manifest, account))
+
+	models := decodeCodexManifestModels(t, manifest.Body)
+	require.Len(t, models, 1)
+	require.Equal(t, []any{"text", "image"}, models[0]["input_modalities"])
 }
 
 func TestCompleteAPIKeyCodexModelsManifestForClientFillsMissingProviderFieldsWithoutOverwritingExplicitMetadata(t *testing.T) {

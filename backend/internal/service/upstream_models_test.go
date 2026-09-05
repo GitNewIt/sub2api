@@ -795,6 +795,127 @@ func TestSyncUpstreamModelCatalogDoesNotPersistPartialMetadataWhenRegistryFails(
 	require.Nil(t, repo.updates, "partial metadata must not replace a more complete persisted snapshot")
 }
 
+// Scenario: Models API 明确返回图片输入能力时，即使 Models.dev 补全失败也保留该能力。
+func TestSyncUpstreamModelCatalogPersistsExplicitInputModalitiesWhenRegistryFails(t *testing.T) {
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"models":[{
+			"id":"custom-vision-model",
+			"input_modalities":["text","image"]
+		}]}`))},
+		{StatusCode: http.StatusBadGateway, Body: io.NopCloser(strings.NewReader(`{"error":"unavailable"}`))},
+	}}
+	repo := &upstreamModelMetadataRepoStub{}
+	svc := &AccountTestService{accountRepo: repo, httpUpstream: upstream, cfg: upstreamModelSyncTestConfig()}
+	account := &Account{
+		ID: 97, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+		Credentials: map[string]any{"api_key": "key", "base_url": "https://provider.example/v1"},
+	}
+
+	catalog, err := svc.SyncUpstreamModelCatalog(context.Background(), account)
+	require.NoError(t, err)
+	require.Equal(t, []string{"custom-vision-model"}, catalog.Models)
+	require.Equal(t, []string{"text", "image"}, catalog.Metadata["custom-vision-model"].InputModalities)
+	require.Equal(t, UpstreamModelMetadataIncompleteCode, catalog.Warnings[0].Code)
+
+	rawSnapshot, ok := repo.updates[UpstreamModelMetadataExtraKey]
+	require.True(t, ok, "explicit capability metadata must be persisted even when enrichment is incomplete")
+	encoded, err := json.Marshal(rawSnapshot)
+	require.NoError(t, err)
+	var snapshot UpstreamModelMetadataSnapshot
+	require.NoError(t, json.Unmarshal(encoded, &snapshot))
+	require.Equal(t, "upstream", snapshot.Source)
+	require.Equal(t, []string{"text", "image"}, snapshot.Models["custom-vision-model"].InputModalities)
+	metadata, ok := account.GetUpstreamModelMetadata("custom-vision-model")
+	require.True(t, ok)
+	require.Equal(t, []string{"text", "image"}, metadata.InputModalities)
+}
+
+// Scenario: 补全失败时，已有快照保留原字段，仅合并本次上游明确声明的能力。
+func TestSyncUpstreamModelCatalogMergesExplicitCapabilityIntoExistingSnapshotWhenRegistryFails(t *testing.T) {
+	account := &Account{
+		ID: 98, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+		Credentials: map[string]any{"api_key": "key", "base_url": "https://provider.example/v1"},
+		Extra: map[string]any{UpstreamModelMetadataExtraKey: map[string]any{
+			"source": "models.dev",
+			"models": map[string]any{"custom-vision-model": map[string]any{
+				"reasoning":                  true,
+				"supported_reasoning_levels": []any{"low", "high"},
+				"input_modalities":           []any{"text"},
+				"context_window":             128000,
+			}},
+		}},
+	}
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"data":[{
+			"id":"custom-vision-model",
+			"input_modalities":["text","image"]
+		}]}`))},
+		{StatusCode: http.StatusBadGateway, Body: io.NopCloser(strings.NewReader(`{"error":"unavailable"}`))},
+	}}
+	repo := &upstreamModelMetadataRepoStub{}
+	svc := &AccountTestService{accountRepo: repo, httpUpstream: upstream, cfg: upstreamModelSyncTestConfig()}
+
+	catalog, err := svc.SyncUpstreamModelCatalog(context.Background(), account)
+	require.NoError(t, err)
+	require.Equal(t, []string{"text", "image"}, catalog.Metadata["custom-vision-model"].InputModalities)
+
+	rawSnapshot, ok := repo.updates[UpstreamModelMetadataExtraKey]
+	require.True(t, ok)
+	encoded, err := json.Marshal(rawSnapshot)
+	require.NoError(t, err)
+	var snapshot UpstreamModelMetadataSnapshot
+	require.NoError(t, json.Unmarshal(encoded, &snapshot))
+	metadata := snapshot.Models["custom-vision-model"]
+	require.Equal(t, []string{"text", "image"}, metadata.InputModalities)
+	require.NotNil(t, metadata.Reasoning)
+	require.True(t, *metadata.Reasoning)
+	require.Equal(t, []string{"low", "high"}, metadata.SupportedReasoningLevels)
+	require.Equal(t, int64(128000), metadata.ContextWindow)
+}
+
+func TestExtractUpstreamModelCatalogParsesExplicitImageCapabilityAliases(t *testing.T) {
+	tests := []struct {
+		name       string
+		modelID    string
+		entry      string
+		modalities []string
+	}{
+		{
+			name:       "supported input modalities",
+			modelID:    "supported-modalities-model",
+			entry:      `{"id":"supported-modalities-model","supported_input_modalities":["text","image"]}`,
+			modalities: []string{"text", "image"},
+		},
+		{
+			name:       "supports vision true",
+			modelID:    "vision-flag-model",
+			entry:      `{"id":"vision-flag-model","supports_vision":true}`,
+			modalities: []string{"text", "image"},
+		},
+		{
+			name:       "supports vision false",
+			modelID:    "text-only-model",
+			entry:      `{"id":"text-only-model","supports_vision":false}`,
+			modalities: []string{"text"},
+		},
+		{
+			name:       "missing capability remains unknown",
+			modelID:    "unknown-model",
+			entry:      `{"id":"unknown-model"}`,
+			modalities: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			models, metadata, err := extractUpstreamModelCatalog([]byte(`{"models":[`+tt.entry+`]}`), false)
+			require.NoError(t, err)
+			require.Equal(t, []string{tt.modelID}, models)
+			require.Equal(t, tt.modalities, metadata[models[0]].InputModalities)
+		})
+	}
+}
+
 func TestFetchUpstreamSupportedModelsUsesConfiguredBodyLimit(t *testing.T) {
 	t.Parallel()
 
