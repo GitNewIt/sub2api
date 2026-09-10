@@ -225,6 +225,51 @@ func TestAccount_GetTempUnschedulableRules(t *testing.T) {
 			account:   &Account{},
 			wantCount: 0,
 		},
+		{
+			name: "error_code_only",
+			account: &Account{
+				Credentials: map[string]any{
+					"temp_unschedulable_rules": []any{
+						map[string]any{
+							"error_code":       float64(503),
+							"keywords":         []any{},
+							"duration_minutes": float64(5),
+						},
+					},
+				},
+			},
+			wantCount: 1,
+		},
+		{
+			name: "keywords_only",
+			account: &Account{
+				Credentials: map[string]any{
+					"temp_unschedulable_rules": []any{
+						map[string]any{
+							"error_code":       float64(0),
+							"keywords":         []any{"overloaded"},
+							"duration_minutes": float64(5),
+						},
+					},
+				},
+			},
+			wantCount: 1,
+		},
+		{
+			name: "both_empty_dropped",
+			account: &Account{
+				Credentials: map[string]any{
+					"temp_unschedulable_rules": []any{
+						map[string]any{
+							"error_code":       float64(0),
+							"keywords":         []any{},
+							"duration_minutes": float64(5),
+						},
+					},
+				},
+			},
+			wantCount: 0,
+		},
 	}
 
 	for _, tt := range tests {
@@ -256,6 +301,102 @@ func TestTempUnschedulableRule_Parse(t *testing.T) {
 	require.Equal(t, 503, rule.ErrorCode)
 	require.Equal(t, []string{"overloaded", "capacity"}, rule.Keywords)
 	require.Equal(t, 5, rule.DurationMinutes)
+}
+
+func TestMatchTempUnschedulableRules(t *testing.T) {
+	enabled := func(rules []any) *Account {
+		return &Account{
+			Credentials: map[string]any{
+				"temp_unschedulable_enabled": true,
+				"temp_unschedulable_rules":   rules,
+			},
+		}
+	}
+	rule := func(code int, keywords []any) map[string]any {
+		return map[string]any{
+			"error_code":       float64(code),
+			"keywords":         keywords,
+			"duration_minutes": float64(5),
+		}
+	}
+
+	tests := []struct {
+		name       string
+		account    *Account
+		statusCode int
+		body       []byte
+		wantHits   int
+		wantKw     string
+	}{
+		{
+			name:       "error_code_only_empty_body",
+			account:    enabled([]any{rule(503, nil)}),
+			statusCode: 503,
+			body:       nil,
+			wantHits:   1,
+			wantKw:     "",
+		},
+		{
+			name:       "error_code_only_wrong_code",
+			account:    enabled([]any{rule(503, nil)}),
+			statusCode: 500,
+			body:       []byte("overloaded"),
+			wantHits:   0,
+		},
+		{
+			name:       "keywords_only_hit",
+			account:    enabled([]any{rule(0, []any{"overloaded"})}),
+			statusCode: 429,
+			body:       []byte("server overloaded"),
+			wantHits:   1,
+			wantKw:     "overloaded",
+		},
+		{
+			name:       "or_code_hit_keyword_miss",
+			account:    enabled([]any{rule(503, []any{"maintenance"})}),
+			statusCode: 503,
+			body:       []byte("unavailable"),
+			wantHits:   1,
+			wantKw:     "",
+		},
+		{
+			name:       "or_keyword_hit_code_miss",
+			account:    enabled([]any{rule(503, []any{"overloaded"})}),
+			statusCode: 500,
+			body:       []byte("server overloaded"),
+			wantHits:   1,
+			wantKw:     "overloaded",
+		},
+		{
+			name:       "neither_miss",
+			account:    enabled([]any{rule(503, []any{"maintenance"})}),
+			statusCode: 500,
+			body:       []byte("unavailable"),
+			wantHits:   0,
+		},
+		{
+			name: "disabled_skip",
+			account: &Account{
+				Credentials: map[string]any{
+					"temp_unschedulable_enabled": false,
+					"temp_unschedulable_rules":   []any{rule(503, nil)},
+				},
+			},
+			statusCode: 503,
+			body:       nil,
+			wantHits:   0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			matches := matchTempUnschedulableRules(tt.account, tt.statusCode, tt.body)
+			require.Len(t, matches, tt.wantHits)
+			if tt.wantHits > 0 {
+				require.Equal(t, tt.wantKw, matches[0].matchedKeyword)
+			}
+		})
+	}
 }
 
 // TestTruncateTempUnschedMessage 测试消息截断

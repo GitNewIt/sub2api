@@ -189,7 +189,7 @@ func TestCheckErrorPolicy(t *testing.T) {
 			expected:   ErrorPolicyTempUnscheduled,
 		},
 		{
-			name: "temp_unschedulable_body_miss_returns_none",
+			name: "temp_unschedulable_neither_miss_returns_none",
 			account: &Account{
 				ID:       5,
 				Type:     AccountTypeOAuth,
@@ -206,7 +206,7 @@ func TestCheckErrorPolicy(t *testing.T) {
 					},
 				},
 			},
-			statusCode: 503,
+			statusCode: 500,
 			body:       []byte(`random msg`),
 			expected:   ErrorPolicyNone,
 		},
@@ -304,9 +304,31 @@ func TestCheckErrorPolicy(t *testing.T) {
 					},
 				},
 			},
-			statusCode: http.StatusServiceUnavailable,
+			statusCode: http.StatusInternalServerError,
 			body:       []byte(`Service temporarily unavailable`),
 			expected:   ErrorPolicySkipped,
+		},
+		{
+			name: "pool_mode_temp_unschedulable_error_code_only_hit",
+			account: &Account{
+				ID:       11,
+				Type:     AccountTypeAPIKey,
+				Platform: PlatformOpenAI,
+				Credentials: map[string]any{
+					"pool_mode":                  true,
+					"temp_unschedulable_enabled": true,
+					"temp_unschedulable_rules": []any{
+						map[string]any{
+							"error_code":       float64(http.StatusServiceUnavailable),
+							"keywords":         []any{},
+							"duration_minutes": float64(30),
+						},
+					},
+				},
+			},
+			statusCode: http.StatusServiceUnavailable,
+			body:       nil,
+			expected:   ErrorPolicyTempUnscheduled,
 		},
 	}
 
@@ -418,7 +440,7 @@ func TestHandleUpstreamError_PoolModePolicies(t *testing.T) {
 		shouldDisable := svc.HandleUpstreamError(
 			context.Background(),
 			account,
-			http.StatusServiceUnavailable,
+			http.StatusInternalServerError,
 			http.Header{},
 			[]byte("Service temporarily unavailable"),
 		)

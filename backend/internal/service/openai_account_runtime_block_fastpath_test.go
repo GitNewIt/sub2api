@@ -698,7 +698,7 @@ func TestOpenAIOAuth429_NonmatchingModelTempRuleKeepsAccountRuntimeBlock(t *test
 	account.Type = AccountTypeOAuth
 	account.Credentials["temp_unschedulable_rules"] = []any{
 		map[string]any{
-			"error_code":       float64(http.StatusTooManyRequests),
+			"error_code":       float64(http.StatusServiceUnavailable),
 			"keywords":         []any{"different marker"},
 			"duration_minutes": float64(10),
 		},

@@ -457,7 +457,8 @@ func (a *Account) GetTempUnschedulableRules() []TempUnschedulableRule {
 			Description:     parseTempUnschedString(entry["description"]),
 		}
 
-		if rule.ErrorCode <= 0 || rule.DurationMinutes <= 0 || len(rule.Keywords) == 0 {
+		// 时长必填；错误码与关键词都可选，但至少一项有效。
+		if rule.DurationMinutes <= 0 || (rule.ErrorCode <= 0 && len(rule.Keywords) == 0) {
 			continue
 		}
 

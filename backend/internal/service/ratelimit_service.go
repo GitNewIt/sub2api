@@ -2553,8 +2553,13 @@ type tempUnschedulableRuleMatch struct {
 	matchedKeyword string
 }
 
+// matchTempUnschedulableRules 按顺序检查账号临时不可调度规则。
+// 错误码与关键词均为可选（解析阶段已保证至少一项有效）：
+// - 仅配置错误码：statusCode 相等即命中（空响应体也算）
+// - 仅配置关键词：响应体命中任一关键词即暂停（任意 statusCode > 0）
+// - 两者都配置：任一命中即暂停（OR），不再要求同时满足
 func matchTempUnschedulableRules(account *Account, statusCode int, responseBody []byte) []tempUnschedulableRuleMatch {
-	if account == nil || !account.IsTempUnschedulableEnabled() || statusCode <= 0 || len(responseBody) == 0 {
+	if account == nil || !account.IsTempUnschedulableEnabled() || statusCode <= 0 {
 		return nil
 	}
 	rules := account.GetTempUnschedulableRules()
@@ -2568,11 +2573,17 @@ func matchTempUnschedulableRules(account *Account, statusCode int, responseBody 
 	bodyLower := strings.ToLower(string(body))
 	matches := make([]tempUnschedulableRuleMatch, 0, 1)
 	for idx, rule := range rules {
-		if rule.ErrorCode != statusCode || len(rule.Keywords) == 0 {
+		hasCode := rule.ErrorCode > 0
+		hasKeywords := len(rule.Keywords) > 0
+		if !hasCode && !hasKeywords {
 			continue
 		}
-		matchedKeyword := matchTempUnschedKeyword(bodyLower, rule.Keywords)
-		if matchedKeyword == "" {
+		codeMatched := hasCode && rule.ErrorCode == statusCode
+		matchedKeyword := ""
+		if hasKeywords {
+			matchedKeyword = matchTempUnschedKeyword(bodyLower, rule.Keywords)
+		}
+		if !codeMatched && matchedKeyword == "" {
 			continue
 		}
 		matches = append(matches, tempUnschedulableRuleMatch{rule: rule, ruleIndex: idx, matchedKeyword: matchedKeyword})

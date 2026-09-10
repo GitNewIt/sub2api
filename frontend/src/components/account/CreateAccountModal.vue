@@ -4984,20 +4984,19 @@ const buildTempUnschedRules = (rules: TempUnschedRuleForm[]) => {
   }> = []
 
   for (const rule of rules) {
-    const errorCode = Number(rule.error_code)
     const duration = Number(rule.duration_minutes)
     const keywords = splitTempUnschedKeywords(rule.keywords)
-    if (!Number.isFinite(errorCode) || errorCode < 100 || errorCode > 599) {
-      continue
-    }
+    const rawErrorCode = Number(rule.error_code)
+    const hasErrorCode = Number.isFinite(rawErrorCode) && rawErrorCode >= 100 && rawErrorCode <= 599
+    // 时长必填；错误码与关键词都可选，但至少填一项。
     if (!Number.isFinite(duration) || duration <= 0) {
       continue
     }
-    if (keywords.length === 0) {
+    if (!hasErrorCode && keywords.length === 0) {
       continue
     }
     out.push({
-      error_code: Math.trunc(errorCode),
+      error_code: hasErrorCode ? Math.trunc(rawErrorCode) : 0,
       keywords,
       duration_minutes: Math.trunc(duration),
       description: rule.description.trim()
