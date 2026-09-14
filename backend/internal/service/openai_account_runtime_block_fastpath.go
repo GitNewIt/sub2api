@@ -100,11 +100,6 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 	if s != nil {
 		scheduleOllamaCloudUsageActivity(s.deferredService, account)
 	}
-	// Capacity shedding describes this request, not account health. Keep the
-	// account schedulable while the request-local retry budget handles recovery.
-	if account != nil && account.Platform == PlatformOpenAI && isOpenAIRequestScopedCapacityShed("", responseBody) {
-		return false
-	}
 	stateCtx, cancel := openAIAccountStateContext(ctx)
 	defer cancel()
 	if account != nil && account.Platform == PlatformOpenAI && isOpenAIHTTPUpstreamAccessStateError(statusCode, "", responseBody) {
@@ -151,6 +146,21 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 		s.rateLimitService.maybeHandleOpenAITeamLinkedError(stateCtx, account, statusCode, responseBody)
 	}
 	stateCtx = withTempUnschedulableModel(stateCtx, canonicalModel)
+	// 管理员配置的临时不可调度必须先于「请求级降载、同账号重试」。
+	// 否则 503 overloaded 会在下面直接 return false，规则永远不落库，客户端空等。
+	if statusCode != http.StatusUnauthorized && s.rateLimitService != nil && account.ShouldHandleErrorCode(statusCode) &&
+		s.rateLimitService.tryTempUnschedulable(stateCtx, account, statusCode, responseBody, firstRequestedModel(canonicalModel)) {
+		// 账号级冷却（5xx / 未知模型）要立刻挡住同进程后续选号；模型级 4xx 仍只封 (账号, 模型)。
+		if tempUnschedulableUsesAccountScope(statusCode) || firstRequestedModel(canonicalModel) == "" {
+			s.BlockAccountScheduling(account, time.Time{}, "temp_unschedulable")
+		}
+		return true
+	}
+	// Capacity shedding describes this request, not account health. Keep the
+	// account schedulable while the request-local retry budget handles recovery.
+	if account.Platform == PlatformOpenAI && isOpenAIRequestScopedCapacityShed("", responseBody) {
+		return false
+	}
 	if s.rateLimitService != nil && len(canonicalModel) > 0 && s.rateLimitService.HandleUpstreamModelNotFound(stateCtx, account, canonicalModel[0], statusCode, responseBody) {
 		return true
 	}

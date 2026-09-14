@@ -573,9 +573,8 @@ func TestApplyErrorPolicy(t *testing.T) {
 				var switchErr *AntigravityAccountSwitchError
 				require.ErrorAs(t, retErr, &switchErr)
 				require.Equal(t, tt.account.ID, switchErr.OriginalAccountID)
-				require.Zero(t, repo.tempCalls)
-				require.Len(t, repo.modelRateLimitCalls, 1)
-				require.Equal(t, "claude-sonnet-4-5", repo.modelRateLimitCalls[0].scope)
+				require.Equal(t, 1, repo.tempCalls)
+				require.Empty(t, repo.modelRateLimitCalls)
 			} else {
 				require.NoError(t, retErr)
 			}

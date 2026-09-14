@@ -90,9 +90,13 @@ func (s *OpenAIGatewayService) failoverOpenAIUpstreamHTTPError(
 ) *UpstreamFailoverError {
 	shouldFailover := s.shouldFailoverOpenAIUpstreamResponse(account, resp.StatusCode, upstreamMsg, respBody)
 	tempUnscheduled := false
-	if c != nil && account != nil && account.Platform != PlatformGrok && !shouldFailover && !IsResponseCommitted(c) && s.rateLimitService != nil {
+	// 502/503 本身就会 shouldFailover=true。若因此跳过 CheckErrorPolicy，
+	// 临时不可调度规则不会落库，随后又被降载逻辑标成同账号重试，客户端一直等待。
+	if c != nil && account != nil && account.Platform != PlatformGrok && !IsResponseCommitted(c) && s.rateLimitService != nil {
 		tempUnscheduled = s.rateLimitService.CheckErrorPolicy(ctx, account, resp.StatusCode, respBody, upstreamModel) == ErrorPolicyTempUnscheduled
-		shouldFailover = tempUnscheduled
+		if tempUnscheduled {
+			shouldFailover = true
+		}
 	}
 	if account != nil && account.Platform == PlatformGrok {
 		shouldFailover = s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody)

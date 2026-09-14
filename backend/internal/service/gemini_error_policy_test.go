@@ -200,6 +200,7 @@ func TestGeminiErrorPolicyIntegration(t *testing.T) {
 		expectHandleError    bool // expect handleGeminiUpstreamError to be called
 		expectShouldFailover bool // for None path, whether shouldFailover triggers
 		expectModelScope     string
+		expectAccountTemp    bool
 	}{
 		{
 			name: "custom_codes_matched_429_failover",
@@ -270,7 +271,7 @@ func TestGeminiErrorPolicyIntegration(t *testing.T) {
 			respBody:          []byte(`overloaded`),
 			expectFailover:    true,
 			expectHandleError: false,
-			expectModelScope:  "gemini-2.5-pro",
+			expectAccountTemp: true,
 		},
 		{
 			name: "no_policy_429_failover_via_shouldFailover",
@@ -353,6 +354,10 @@ func TestGeminiErrorPolicyIntegration(t *testing.T) {
 		verify:
 			require.Equal(t, tt.expectFailover, gotFailover, "failover mismatch")
 			require.Equal(t, tt.expectHandleError, handleErrorCalled, "handleGeminiUpstreamError call mismatch")
+			if tt.expectAccountTemp {
+				require.Equal(t, 1, repo.setTempCalls)
+				require.Zero(t, repo.setModelRateLimitedCalls)
+			}
 			if tt.expectModelScope != "" {
 				require.Equal(t, 1, repo.setModelRateLimitedCalls)
 				require.Equal(t, tt.expectModelScope, repo.lastModelScope)

@@ -525,3 +525,27 @@ func TestRateLimitService_HandleUpstreamError_ModelNotFoundImageModelStillCoolsD
 	require.Len(t, repo.modelRateLimitCalls, 1, "守卫只作用于 codex plan-gated 分支")
 	require.Equal(t, upstreamModelNotFoundReason, repo.modelRateLimitCalls[0].reason)
 }
+
+func TestRateLimitService_HandleTempUnschedulable_5xxUsesAccountScope(t *testing.T) {
+	repo := &modelNotFoundAccountRepoStub{}
+	svc := &RateLimitService{accountRepo: repo}
+	account := openAIModelNotFoundTempAccount()
+	account.Credentials["temp_unschedulable_rules"] = []any{
+		map[string]any{
+			"error_code":       float64(http.StatusServiceUnavailable),
+			"duration_minutes": float64(1),
+		},
+	}
+
+	handled := svc.HandleTempUnschedulable(
+		context.Background(),
+		account,
+		http.StatusServiceUnavailable,
+		[]byte(`{"error":{"message":"Service Unavailable"}}`),
+		"gpt-5.4",
+	)
+
+	require.True(t, handled)
+	require.Equal(t, 1, repo.tempCalls)
+	require.Empty(t, repo.modelRateLimitCalls)
+}

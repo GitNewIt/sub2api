@@ -1611,13 +1611,7 @@ func (s *OpenAIGatewayService) handleOpenAIStreamTerminalAccountSideEffects(
 	canonicalModel ...string,
 ) (int, bool) {
 	statusCode := openAIStreamFailureStatus(payload, message)
-	switch statusCode {
-	case http.StatusForbidden:
-		if !openAIStream403AccountFailure(payload, message) {
-			return statusCode, false
-		}
-		fallthrough
-	case http.StatusUnauthorized, http.StatusTooManyRequests, 529:
+	applyAccountSideEffects := func() bool {
 		ctx := context.Background()
 		if c != nil && c.Request != nil {
 			ctx = c.Request.Context()
@@ -1632,8 +1626,22 @@ func (s *OpenAIGatewayService) handleOpenAIStreamTerminalAccountSideEffects(
 			// 只有 OAuth/SetupToken 的 Spark 配额 429 才需要保留 headers 读取明确的 5h/7d reset。
 			accountHeaders = openAIWSSemantic429Headers(account, model, headers)
 		}
-		return statusCode, s.handleOpenAIAccountUpstreamError(ctx, account, statusCode, accountHeaders, payload, model)
+		return s.handleOpenAIAccountUpstreamError(ctx, account, statusCode, accountHeaders, payload, model)
+	}
+	switch statusCode {
+	case http.StatusForbidden:
+		if !openAIStream403AccountFailure(payload, message) {
+			return statusCode, false
+		}
+		return statusCode, applyAccountSideEffects()
+	case http.StatusUnauthorized, http.StatusTooManyRequests, 529:
+		return statusCode, applyAccountSideEffects()
 	default:
+		// 流内 502/503 以前走 default 直接 shouldDisable=false，临时不可调度规则完全不生效，
+		// 再叠加 overloaded 同账号重试，客户端就会一直挂起。
+		if statusCode >= 500 {
+			return statusCode, applyAccountSideEffects()
+		}
 		return statusCode, false
 	}
 }

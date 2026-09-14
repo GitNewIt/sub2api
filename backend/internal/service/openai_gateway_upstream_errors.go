@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
@@ -391,6 +392,14 @@ func (s *OpenAIGatewayService) newOpenAIAccountFailoverErrorWithClassificationHe
 	if oauth429Retry {
 		failoverErr.SameAccountRetryDeadline = s.openAIOAuth429RetryDeadline(account)
 		failoverErr.SameAccountRetryDelay = openAIOAuth429SameAccountRetryDelay(responseHeaders, failoverErr.SameAccountRetryDeadline)
+	}
+	// shouldDisable 表示账号（或模型）已被规则摘掉。newOpenAIUpstreamFailoverError
+	// 会把 overloaded 5xx 再 OR 成 RequestScopedTransient，若不在这里清掉，
+	// 临时不可调度命中后仍会在原号上重试，客户端表现为一直等待。
+	if shouldDisable {
+		failoverErr.RetryableOnSameAccount = false
+		failoverErr.RequestScopedTransient = false
+		failoverErr.SameAccountRetryDeadline = time.Time{}
 	}
 	return failoverErr
 }

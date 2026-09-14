@@ -451,11 +451,8 @@ func TestOpenAIRuntimeBlocker_IgnoresNonOpenAIFromRateLimitService(t *testing.T)
 	require.False(t, gateway.isOpenAIAccountRuntimeBlocked(account))
 }
 
-// 自 #4547（issue 4527 第4点）起，临时不可调度规则命中已知模型时按模型隔离：
-// 只封 (账号, 模型) 对，不再账号级一刀切；未知模型仍走账号级兜底
-// （见 TestOpenAITempUnschedulable_UnknownModelKeepsAccountRuntimeBlock）。
-// 池模式规则仍然生效（issue 4470）：停止同账号重试并对命中模型设临时封锁。
-func TestOpenAIPoolModeTempRule_StopsSameAccountRetryAndIsolatesBlockToModel(t *testing.T) {
+// 5xx 临时不可调度必须停整号：只写模型冷却时账号仍可调度，同账号会反复打 503。
+func TestOpenAIPoolModeTempRule_StopsSameAccountRetryAndPausesAccount(t *testing.T) {
 	repo := &errorPolicyRepoStub{}
 	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
 	gateway := &OpenAIGatewayService{
@@ -500,13 +497,70 @@ func TestOpenAIPoolModeTempRule_StopsSameAccountRetryAndIsolatesBlockToModel(t *
 
 	require.NotNil(t, failoverErr)
 	require.False(t, failoverErr.RetryableOnSameAccount)
-	require.Zero(t, repo.tempCalls)
+	require.False(t, failoverErr.RequestScopedTransient)
+	require.Equal(t, 1, repo.tempCalls)
 	require.Equal(t, 0, repo.setErrCalls)
 	require.Equal(t, StatusActive, account.Status)
-	require.Len(t, repo.modelRateLimitCalls, 1)
-	require.Equal(t, "gpt-5.4", repo.modelRateLimitCalls[0].scope)
-	require.False(t, gateway.isOpenAIAccountRuntimeBlocked(account))
-	require.False(t, gateway.isOpenAIAccountRequestRuntimeBlocked(account, "gpt-5.5"))
+	require.Empty(t, repo.modelRateLimitCalls)
+	require.True(t, gateway.isOpenAIAccountRuntimeBlocked(account))
+}
+
+func TestOpenAI503TempUnschedRuleBeatsCapacityShedAndStopsSameAccountRetry(t *testing.T) {
+	repo := &errorPolicyRepoStub{}
+	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	gateway := &OpenAIGatewayService{rateLimitService: rateLimitService}
+	account := &Account{
+		ID:          88,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Credentials: map[string]any{
+			"temp_unschedulable_enabled": true,
+			"temp_unschedulable_rules": []any{
+				map[string]any{
+					"error_code":       float64(http.StatusServiceUnavailable),
+					"duration_minutes": float64(1),
+				},
+			},
+		},
+	}
+	body := []byte(`{"error":{"type":"server_error","message":"Our servers are currently overloaded. Please try again later."}}`)
+
+	shouldDisable := gateway.handleOpenAIAccountUpstreamError(
+		context.Background(),
+		account,
+		http.StatusServiceUnavailable,
+		http.Header{},
+		body,
+		"gpt-5",
+	)
+	require.True(t, shouldDisable)
+	require.Equal(t, 1, repo.tempCalls)
+	require.Empty(t, repo.modelRateLimitCalls)
+
+	failoverErr := gateway.newOpenAIAccountFailoverError(
+		account,
+		http.StatusServiceUnavailable,
+		http.Header{},
+		body,
+		"Our servers are currently overloaded. Please try again later.",
+		true,
+		true,
+	)
+	require.False(t, failoverErr.RetryableOnSameAccount)
+	require.False(t, failoverErr.RequestScopedTransient)
+
+	status, disabled := gateway.handleOpenAIStreamTerminalAccountSideEffects(
+		nil,
+		account,
+		[]byte(`{"type":"response.failed","response":{"error":{"code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."}}}`),
+		"Our servers are currently overloaded. Please try again later.",
+		nil,
+		"gpt-5",
+	)
+	require.Equal(t, http.StatusServiceUnavailable, status)
+	require.True(t, disabled)
 }
 
 func TestOpenAIPoolModeRetryable5xx_DoesNotCreateModelTransientBlock(t *testing.T) {

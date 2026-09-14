@@ -2684,11 +2684,13 @@ func (s *RateLimitService) triggerTempUnschedulable(ctx context.Context, account
 		reason = strings.TrimSpace(state.ErrorMessage)
 	}
 
-	// Persist known-model failures under the model key so the scheduler excludes
-	// only this (account, model) pair. Authentication and model-unknown failures
-	// retain the legacy account-wide temporary-unschedulable behavior below.
+	// 4xx（如 404 model-not-found、模型配额 429）按 (账号, 模型) 隔离，避免误伤其它模型。
+	// 5xx / 401 必须写账号级 temp_unschedulable_until：
+	// - 502/503 是上游可用性故障，不是「这个模型不能用」；
+	// - 只写 model_rate_limits 时，账号列表看不到「临时不可调度」；
+	// - 同账号重试不重新选号，IsSchedulable() 仍为 true，请求会在原号上反复打 5xx，客户端一直挂起。
 	modelKey := firstRequestedModel(requestedModel)
-	if modelKey != "" && statusCode != http.StatusUnauthorized {
+	if modelKey != "" && !tempUnschedulableUsesAccountScope(statusCode) {
 		if err := s.accountRepo.SetModelRateLimit(ctx, account.ID, modelKey, until, reason); err != nil {
 			slog.Warn("temp_unsched_model_rate_limit_set_failed", "account_id", account.ID, "model", modelKey, "error", err)
 			// The rule matched, so fail over the current request even if persistence
@@ -2713,6 +2715,13 @@ func (s *RateLimitService) triggerTempUnschedulable(ctx context.Context, account
 
 	slog.Info("account_temp_unschedulable", "account_id", account.ID, "until", until, "rule_index", ruleIndex, "status_code", statusCode)
 	return true
+}
+
+func tempUnschedulableUsesAccountScope(statusCode int) bool {
+	if statusCode == http.StatusUnauthorized {
+		return true
+	}
+	return statusCode >= 500 && statusCode <= 599
 }
 
 func truncateTempUnschedMessage(body []byte, maxBytes int) string {

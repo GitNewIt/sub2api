@@ -230,9 +230,8 @@ func TestHandleNonStreamingResponse_NonJSON2xxMatchesModelScopedTempUnschedulabl
 	require.True(t, errors.As(err, &failoverErr))
 	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
 	require.Equal(t, body, failoverErr.ResponseBody)
-	require.Zero(t, repo.tempUnschedCalls)
-	require.Equal(t, 1, repo.modelRateLimitCalls)
-	require.Equal(t, "claude-sonnet-4-6", repo.modelScope)
-	require.Contains(t, repo.modelReason, `"status_code":502`)
-	require.Contains(t, repo.modelReason, `"matched_keyword":"upstream request failed"`)
+	require.Equal(t, 1, repo.tempUnschedCalls)
+	require.Zero(t, repo.modelRateLimitCalls)
+	require.Contains(t, repo.tempReason, `"status_code":502`)
+	require.Contains(t, repo.tempReason, `"matched_keyword":"upstream request failed"`)
 }
